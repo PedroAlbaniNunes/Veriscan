@@ -1,0 +1,35 @@
+# Ambientes virtuais
+.venv/
+venv/
+
+# Arquivos de cache e compilados do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignorar modelos pesados (o GitHub bloqueia arquivos maiores que 100MB)
+*.pth
+densenet121_custom.pth
+
+# Ignorar arquivos compactados
+*.zip
+archive.zip
+
+# Ignorar gráficos de treinamento gerados localmente (opcional)
+grafico_treinamento*.png
+
+# ==========================================
+# CONFIGURAÇÃO DO DATASET
+# ==========================================
+# 1. Ignorar todos os arquivos dentro das subpastas finais
+dataset/train/real/*
+dataset/train/fake/*
+dataset/test/real/*
+dataset/test/fake/*
+
+# 2. Abrir uma exceção APENAS para os arquivos .gitkeep
+!dataset/train/real/.gitkeep
+!dataset/train/fake/.gitkeep
+!dataset/test/real/.gitkeep
+!dataset/test/fake/.gitkeep

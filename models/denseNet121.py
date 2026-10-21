@@ -19,7 +19,7 @@ DATASET_PATH = os.path.join(BASE_DIR, '../dataset')  # Pasta com subpastas por c
 # ==========================================
 BATCH_SIZE = 32
 LEARNING_RATE = 0.0001
-EPOCHS = 60
+EPOCHS = 100
 NUM_CLASSES = 2  # Altere para o seu número de categorias
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -198,8 +198,8 @@ def plot_history(history):
     plt.grid(True, linestyle='--', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig('grafico_treinamento_completo2.png', dpi=300)
-    print("\nGráfico detalhado salvo como 'grafico_treinamento_completo2.png'!")
+    plt.savefig('grafico_treinamento_completo_denseNet121.png', dpi=300)
+    print("\nGráfico detalhado salvo como 'grafico_treinamento_densenet121.png'!")
     plt.show()
 
 # Iniciar o treino

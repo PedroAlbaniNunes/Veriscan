@@ -7,20 +7,19 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 import matplotlib.pyplot as plt 
 import os
 
-
 # ==========================================
 # 0. AJEITANDO O PATH DO DATASET
 # ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATASET_PATH = os.path.join(BASE_DIR, '../dataset')  # Pasta com subpastas por classe
+DATASET_PATH = os.path.join(BASE_DIR, '../dataset')
 
 # ==========================================
 # 1. CONFIGURAÇÕES E HIPERPARAMETROS
 # ==========================================
 BATCH_SIZE = 32
-LEARNING_RATE = 0.0001
-EPOCHS = 100
-NUM_CLASSES = 2  # Altere para o seu número de categorias
+LEARNING_RATE = 1e-4
+EPOCHS = 30  # Com transfer learning, geralmente convergem mais rápido
+NUM_CLASSES = 2
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print(f"Executando em: {DEVICE}")
@@ -28,12 +27,12 @@ print(f"Executando em: {DEVICE}")
 # ==========================================
 # 2. PREPARAÇÃO DOS DADOS (DATA AUGMENTATION)
 # ==========================================
-# Como você vai treinar do zero, o Augmentation é vital para evitar overfitting
 data_transforms = {
     'train': transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(15),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ]),
@@ -44,26 +43,32 @@ data_transforms = {
     ]),
 }
 
-# Carregando os datasets
-# Espera-se que dentro de DATASET_PATH existam as pastas 'train' e 'test'
 image_datasets = {x: datasets.ImageFolder(os.path.join(DATASET_PATH, x), data_transforms[x])
                   for x in ['train', 'test']}
 
-dataloaders = {x: DataLoader(image_datasets[x], batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+dataloaders = {x: DataLoader(image_datasets[x], batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
               for x in ['train', 'test']}
 
 dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'test']}
 
 # ==========================================
-# 3. DEFINIÇÃO DA DENSENET-121 DO ZERO
+# 3. DEFINIÇÃO DA DENSENET-121 COM TRANSFER LEARNING
 # ==========================================
 def build_model(num_classes):
-    # weights=None garante que não usaremos o modelo pré-treinado
+    # Carregando pesos oficiais pré-treinados do ImageNet
     model = models.densenet121(weights=models.DenseNet121_Weights.DEFAULT)
     
-    # Ajustando a última camada (classifier)
+    # CONGELAR AS CAMADAS DE EXTRAÇÃO DE CARACTERÍSTICAS
+    # Isso impede que os pesos pré-treinados sejam destruídos no início com poucos dados
+    for param in model.parameters():
+        param.requires_grad = False
+        
+    # Ajustando a última camada (classifier) permitindo gradiente apenas nela
     num_ftrs = model.classifier.in_features
-    model.classifier = nn.Linear(num_ftrs, num_classes)
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.5), # Dropout adicionado para evitar overfitting
+        nn.Linear(num_ftrs, num_classes)
+    )
     
     return model.to(DEVICE)
 
@@ -73,13 +78,14 @@ model = build_model(NUM_CLASSES)
 # 4. FUNÇÃO DE PERDA E OTIMIZADOR
 # ==========================================
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+# Otimizamos apenas os parâmetros da camada classificadora final
+optimizer = optim.Adam(model.classifier.parameters(), lr=LEARNING_RATE)
 
 # ==========================================
-# 5. LOOP DE TREINAMENTO (COM F1, PRECISION E RECALL)
+# 5. LOOP DE TREINAMENTO
 # ==========================================
 def train_model(model, criterion, optimizer, num_epochs=25):
-    # Dicionário expandido para guardar todas as métricas
     history = {
         'train_loss': [], 'test_loss': [], 
         'train_acc': [], 'test_acc': [],
@@ -87,6 +93,8 @@ def train_model(model, criterion, optimizer, num_epochs=25):
         'train_prec': [], 'test_prec': [],
         'train_rec': [], 'test_rec': []
     }
+
+    best_acc = 0.0
 
     for epoch in range(num_epochs):
         print(f'\nÉpoca {epoch + 1}/{num_epochs}')
@@ -101,7 +109,6 @@ def train_model(model, criterion, optimizer, num_epochs=25):
             running_loss = 0.0
             running_corrects = 0
             
-            # Listas para guardar as previsões e gabaritos da época inteira
             all_preds = []
             all_labels = []
 
@@ -123,22 +130,18 @@ def train_model(model, criterion, optimizer, num_epochs=25):
                 running_loss += loss.item() * inputs.size(0)
                 running_corrects += torch.sum(preds == labels.data)
                 
-                # Salvando os resultados para o scikit-learn (movendo para CPU)
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
 
-            # Cálculos das métricas
             epoch_loss = running_loss / dataset_sizes[phase]
             epoch_acc = (running_corrects.double() / dataset_sizes[phase]).item()
             
-            # Calculando F1, Precision e Recall (usando macro para balancear as classes)
             epoch_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
             epoch_prec = precision_score(all_labels, all_preds, average='macro', zero_division=0)
             epoch_rec = recall_score(all_labels, all_preds, average='macro', zero_division=0)
 
             print(f'{phase.capitalize()} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} | F1: {epoch_f1:.4f} | Prec: {epoch_prec:.4f} | Rec: {epoch_rec:.4f}')
 
-            # Alimentando o histórico
             prefix = 'train_' if phase == 'train' else 'test_'
             history[f'{prefix}loss'].append(epoch_loss)
             history[f'{prefix}acc'].append(epoch_acc)
@@ -149,67 +152,11 @@ def train_model(model, criterion, optimizer, num_epochs=25):
     return model, history
 
 # ==========================================
-# 6. PAINEL DE GRÁFICOS COMPLETO
+# 6. EXECUÇÃO
 # ==========================================
-def plot_history(history):
-    epochs = range(1, len(history['train_loss']) + 1)
-    
-    # Criando um painel 2x2 para acomodar 4 gráficos
-    plt.figure(figsize=(16, 10))
-    
-    # Gráfico 1: Loss
-    plt.subplot(2, 2, 1)
-    plt.plot(epochs, history['train_loss'], label='Treino', marker='o', color='blue')
-    plt.plot(epochs, history['test_loss'], label='Teste', marker='o', color='red')
-    plt.title('Evolução da Perda (Loss)')
-    plt.xlabel('Épocas')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Gráfico 2: Acurácia
-    plt.subplot(2, 2, 2)
-    plt.plot(epochs, history['train_acc'], label='Treino', marker='o', color='blue')
-    plt.plot(epochs, history['test_acc'], label='Teste', marker='o', color='red')
-    plt.title('Evolução da Acurácia')
-    plt.xlabel('Épocas')
-    plt.ylabel('Acurácia')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Gráfico 3: F1-Score
-    plt.subplot(2, 2, 3)
-    plt.plot(epochs, history['train_f1'], label='Treino', marker='o', color='blue')
-    plt.plot(epochs, history['test_f1'], label='Teste', marker='o', color='red')
-    plt.title('Evolução do F1-Score (Macro)')
-    plt.xlabel('Épocas')
-    plt.ylabel('F1-Score')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    # Gráfico 4: Precisão e Recall (Apenas de Teste para não poluir)
-    plt.subplot(2, 2, 4)
-    plt.plot(epochs, history['test_prec'], label='Precisão (Teste)', marker='s', color='purple')
-    plt.plot(epochs, history['test_rec'], label='Recall (Teste)', marker='^', color='orange')
-    plt.title('Precisão vs Recall (Validação)')
-    plt.xlabel('Épocas')
-    plt.ylabel('Métrica')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
-    plt.tight_layout()
-    plt.savefig('grafico_treinamento_completo_denseNet121.png', dpi=300)
-    print("\nGráfico detalhado salvo como 'grafico_treinamento_densenet121.png'!")
-    plt.show()
-
-# Iniciar o treino
 if __name__ == '__main__':
-    # Agora a função retorna o modelo e o histórico
     model_trained, training_history = train_model(model, criterion, optimizer, num_epochs=EPOCHS)
     
-    # Salvar o modelo final
+    # Salvar o novo modelo treinado com transfer learning
     torch.save(model_trained.state_dict(), 'densenet121_custom.pth')
-    print("Modelo salvo com sucesso!")
-    
-    # Gerar e exibir os gráficos
-    plot_history(training_history)
+    print("Novo modelo com Transfer Learning salvo com sucesso como 'densenet121_custom.pth'!")

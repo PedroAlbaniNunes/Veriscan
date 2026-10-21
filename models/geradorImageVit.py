@@ -130,8 +130,15 @@ def plot_analysis_panel(image_path, save_path='heatmap_resultado.png'):
     img_resized = image_pil.resize((224, 224))
     img_np = np.array(img_resized)
 
-    mask_resized = cv2.resize(mask, (224, 224))
-    
+    # Em vez de um redimensionamento simples, usamos interpolação cúbica para suavizar
+    mask_resized = cv2.resize(mask, (224, 224), interpolation=cv2.INTER_CUBIC)
+
+    # Aplicar um leve desfoque gaussiano para eliminar o aspecto pixelado/quadriculado
+    mask_resized = cv2.GaussianBlur(mask_resized, (15, 15), 0)
+
+    # Normalizar novamente após o filtro
+    mask_resized = (mask_resized - mask_resized.min()) / (mask_resized.max() - mask_resized.min() + 1e-8)  
+
     # Criar o mapa de calor colorido (colormap JET)
     heatmap = cv2.applyColorMap(np.uint8(255 * mask_resized), cv2.COLORMAP_JET)
     heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
